@@ -1,0 +1,25 @@
+# Example: Plex with AMD VAAPI hardware transcoding via the musl driver fix.
+# Build uses this repo's Dockerfile (linuxserver/plex + Alpine musl radeonsi).
+services:
+  plex:
+    build: .
+    container_name: plex
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - /dev/dri:/dev/dri            # GPU render node (host must expose it)
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - VERSION=docker
+      - TZ=Etc/UTC
+      # Point Plex's musl transcoder at the bundled musl radeonsi driver.
+      # Keep these in `environment:` (not just Dockerfile ENV) so linuxserver's
+      # s6 with-contenv exports them to PMS and the transcoder children.
+      - LIBVA_DRIVERS_PATH=/opt/vaapi/dri
+      - LIBVA_DRIVER_NAME=radeonsi   # use iHD/i965 for Intel instead
+    volumes:
+      - ./config:/config
+      - /path/to/media:/media
+    tmpfs:
+      - /transcode:size=8g           # optional: RAM-backed transcode scratch

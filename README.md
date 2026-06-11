@@ -186,6 +186,46 @@ Older Alpine is fine as long as its mesa is new enough for your GPU
 
 ---
 
+## Keeping Plex updated (important with a custom image)
+
+Because this is a **locally-built** image, **Watchtower / auto-updaters can't
+update it** — there's nothing to pull from a registry. Plan for two independent
+update tracks:
+
+**1. Plex Media Server itself** — let linuxserver self-update it. Set in your
+compose `environment:`:
+
+```yaml
+- VERSION=latest      # newest STABLE Plex, downloaded on each container start
+# - VERSION=plexpass  # newest BETA (Plex Pass) instead
+# - VERSION=docker    # pinned to whatever's baked in the image (no self-update)
+```
+
+With `latest`/`plexpass`, a `docker restart` (or recreate) pulls the newest PMS.
+**The VAAPI driver is unaffected** — it lives in `/opt/vaapi`, decoupled from PMS,
+and is referenced only by env var.
+
+**2. The base image + the VAAPI driver** — rebuild occasionally (e.g. monthly, or
+after a linuxserver release) to refresh the OS layer and the Alpine musl driver:
+
+```console
+docker compose build --pull plex && docker compose up -d plex
+```
+
+### Will a Plex update break HW transcoding?
+
+Almost certainly not — and the design is deliberately safe. The driver is built on
+musl **1.2.2** (the *floor*). If Plex bumps its bundled musl *upward* (1.2.3+), the
+1.2.2-built driver still loads, because newer musl is a **superset** of older
+symbols. The only break direction is a driver built on musl *newer* than Plex's —
+which only happens if you bump the Alpine base too far ahead. So: **leave the
+Alpine pin alone**, and re-check only if a `--pull` rebuild ever changes Plex's
+musl. Verify after any update:
+
+```console
+docker exec plex /usr/lib/plexmediaserver/lib/libc.so 2>&1 | grep Version
+```
+
 ## Other GPUs
 
 - **Intel (QSV/VAAPI):** Alpine's `intel-media-driver` (`iHD`) or

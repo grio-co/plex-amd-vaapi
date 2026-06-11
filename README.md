@@ -212,6 +212,15 @@ after a linuxserver release) to refresh the OS layer and the Alpine musl driver:
 docker compose build --pull plex && docker compose up -d plex
 ```
 
+The included [`update-plex.sh`](./update-plex.sh) does exactly this and then
+re-runs the hardware-encode self-test, warning you if a Plex musl bump ever needs
+a different Alpine pin:
+
+```console
+./update-plex.sh                      # defaults: service=plex container=plex
+./update-plex.sh plex plex-v2         # custom compose service / container name
+```
+
 ### Will a Plex update break HW transcoding?
 
 Almost certainly not — and the design is deliberately safe. The driver is built on

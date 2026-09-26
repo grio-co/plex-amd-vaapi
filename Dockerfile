@@ -3,7 +3,17 @@
 # musl libva, but NO VA driver). A glibc mesa driver can NEVER dlopen into a musl
 # process. Alpine ships a musl-built radeonsi driver (mesa-va-gallium) -- the only
 # kind Plex's transcoder can load.
-FROM alpine:3.15 AS vaapi
+#
+# ALPINE_VERSION must not exceed the musl release Plex bundles. Plex Media Server
+# 1.43.4 (2026-09) still ships musl 1.2.2, and every Alpine >= 3.16 builds mesa
+# against musl >= 1.2.3 whose driver imports qsort_r -- which Plex's musl does not
+# export ("Error relocating radeonsi_drv_video.so: qsort_r: symbol not found").
+# Alpine 3.15 is EOL (2023-11) but it is a build stage only: nothing from it runs
+# in the final image except the driver .so files copied out below. The v3.15
+# package mirror is still served. See README "Why Alpine 3.15 (and why not newer)".
+# PLACEHOLDER(greg): confirm staying on Alpine 3.15 (EOL); 3.16-3.24 all need qsort_r, which Plex's musl 1.2.2 lacks
+ARG ALPINE_VERSION=3.15
+FROM alpine:${ALPINE_VERSION} AS vaapi
 RUN apk add --no-cache mesa-va-gallium libva patchelf
 RUN set -eux; mkdir -p /opt/vaapi/dri; \
     cp -aL /usr/lib/dri/radeonsi_drv_video.so /opt/vaapi/dri/; \

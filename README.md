@@ -1,5 +1,7 @@
 # Plex AMD VAAPI Hardware Transcoding (the musl fix)
 
+[![driver-check](https://github.com/grioghar/plex-amd-vaapi/actions/workflows/driver-check.yml/badge.svg)](https://github.com/grioghar/plex-amd-vaapi/actions/workflows/driver-check.yml)
+
 Getting **AMD iGPU/GPU hardware transcoding** working in a Dockerized Plex Media
 Server — and a full write-up of *why* the "obvious" approaches all fail.
 
@@ -143,6 +145,25 @@ Then in **Plex → Settings → Transcoder**, enable
 **"Use hardware acceleration when available"** (requires **Plex Pass**).
 
 ### 2. Verify the driver loads
+
+**No GPU needed** -- the image ships a self-test that loads the driver through
+Plex's *own* musl loader (`ld-musl --list`, then `LD_PRELOAD` into
+`Plex Transcoder`), which is exactly where a musl mismatch shows up as
+`Error relocating ...: symbol not found`:
+
+```console
+docker run --rm --entrypoint /opt/vaapi/driver-check.sh plex-amd   # on a fresh build
+docker exec plex /opt/vaapi/driver-check.sh                          # in a running container
+```
+
+It ends with `PASS: /opt/vaapi/dri/radeonsi_drv_video.so loads under Plex's
+musl loader`, and warns if Plex's bundled musl is no longer the 1.2.2 the
+driver was built for. The same script runs weekly in CI
+([`driver-check.yml`](./.github/workflows/driver-check.yml)) against both the
+pinned base tag and `linuxserver/plex:latest`, so a Plex musl bump is noticed
+before it reaches your box.
+
+**With the GPU**, run a real encode through the transcoder:
 
 ```console
 docker exec plex bash -c '

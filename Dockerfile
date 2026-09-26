@@ -36,5 +36,8 @@ RUN set -eux; mkdir -p /opt/vaapi/dri; \
 # Stage 2: linuxserver/plex + the musl VAAPI driver (PLEX_VERSION: see top)
 FROM lscr.io/linuxserver/plex:${PLEX_VERSION}
 COPY --from=vaapi /opt/vaapi /opt/vaapi
+# Self-test: loads the driver through Plex's own musl loader, no GPU required.
+#   docker run --rm --entrypoint /opt/vaapi/driver-check.sh <image>
+COPY ci/driver-check.sh /opt/vaapi/driver-check.sh
 ENV LIBVA_DRIVERS_PATH=/opt/vaapi/dri \
     LIBVA_DRIVER_NAME=radeonsi

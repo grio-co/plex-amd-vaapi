@@ -1,0 +1,70 @@
+# Weekly proof that the musl VAAPI driver still loads inside Plex's transcoder.
+#
+# No GPU is available on GitHub runners, so this does not run an encode. It
+# builds the image and runs /opt/vaapi/driver-check.sh (ci/driver-check.sh),
+# which loads the driver through Plex's *own* ld-musl: `--list` for dependency
+# resolution and LD_PRELOAD into "Plex Transcoder" for full relocation. A driver
+# built against a musl newer than the one Plex bundles fails right there with
+# "Error relocating ...: qsort_r: symbol not found" -- the failure this repo
+# exists to prevent.
+#
+# Two legs: the pinned PLEX_VERSION from the Dockerfile (what users build), and
+# linuxserver/plex:latest (early warning when Plex bumps its bundled musl or
+# moves the transcoder; the check prints a WARN when the musl version changes).
+name: driver-check
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - ci/**
+      - .github/workflows/driver-check.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - ci/**
+      - .github/workflows/driver-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  driver-check:
+    name: driver loads (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pinned base
+            build_args: ""
+          - name: linuxserver/plex:latest
+            build_args: PLEX_VERSION=latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          pull: true
+          tags: plex-amd-vaapi:ci
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Show base image and bundled driver
+        run: |
+          docker image inspect plex-amd-vaapi:ci --format 'size={{.Size}} labels={{json .Config.Labels}}'
+          docker run --rm --entrypoint sh plex-amd-vaapi:ci -c 'ls -la /opt/vaapi /opt/vaapi/dri; cat /build_version 2>/dev/null || true'
+
+      - name: Driver loads under Plex's musl loader (no GPU)
+        run: docker run --rm --entrypoint /opt/vaapi/driver-check.sh plex-amd-vaapi:ci

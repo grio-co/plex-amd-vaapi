@@ -11,6 +11,8 @@
 #
 # Usage:  ./update-plex.sh [compose-service] [container-name] [render-node]
 #   defaults: service=plex  container=plex  render=/dev/dri/renderD128
+#   env:      PLEX_VERSION=<linuxserver tag>  override the pinned base image tag
+#             (passed through as a build arg; unset = Dockerfile/compose default)
 # Run it from the directory containing your docker-compose.yml.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -19,8 +21,13 @@ SVC="${1:-plex}"
 CTR="${2:-plex}"
 RENDER="${3:-/dev/dri/renderD128}"
 
-echo ">> Pulling newest linuxserver/plex base + rebuilding the VAAPI driver layer..."
-docker compose build --pull "$SVC"
+build_args=()
+if [ -n "${PLEX_VERSION:-}" ]; then
+  echo ">> Using linuxserver/plex base tag: $PLEX_VERSION"
+  build_args+=(--build-arg "PLEX_VERSION=$PLEX_VERSION")
+fi
+echo ">> Pulling the linuxserver/plex base + rebuilding the VAAPI driver layer..."
+docker compose build --pull ${build_args[@]+"${build_args[@]}"} "$SVC"
 
 echo ">> Recreating $CTR..."
 docker compose up -d "$SVC"

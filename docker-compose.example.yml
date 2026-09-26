@@ -2,7 +2,16 @@
 # Build uses this repo's Dockerfile (linuxserver/plex + Alpine musl radeonsi).
 services:
   plex:
-    build: .
+    build:
+      context: .
+      args:
+        # linuxserver/plex base image tag. The Dockerfile default is pinned;
+        # bump this (see https://github.com/linuxserver/docker-plex/releases)
+        # to move to a newer PMS / linuxserver build, then `up -d --build`.
+        PLEX_VERSION: "1.43.4.10903-e5521bd8c-ls325"
+        # Alpine release the musl radeonsi driver is taken from. Must not be
+        # newer than the musl Plex bundles -- see README before changing.
+        # ALPINE_VERSION: "3.15"
     container_name: plex
     restart: unless-stopped
     network_mode: host

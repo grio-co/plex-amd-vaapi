@@ -1,5 +1,7 @@
 # Plex AMD VAAPI Hardware Transcoding (the musl fix)
 
+[![driver-check](https://github.com/grioghar/plex-amd-vaapi/actions/workflows/driver-check.yml/badge.svg)](https://github.com/grioghar/plex-amd-vaapi/actions/workflows/driver-check.yml)
+
 Getting **AMD iGPU/GPU hardware transcoding** working in a Dockerized Plex Media
 Server — and a full write-up of *why* the "obvious" approaches all fail.
 
@@ -34,12 +36,14 @@ bundled musl version, bundle the driver + its musl deps, and point Plex at them.
 
 ```dockerfile
 # Plex bundles musl 1.2.2; qsort_r landed in musl 1.2.3, so use the last
-# Alpine that ships musl 1.2.2 -> Alpine 3.15. (3.16+ = musl 1.2.4/1.2.5 = too new)
-FROM alpine:3.15 AS vaapi
+# Alpine that ships musl 1.2.2 -> Alpine 3.15. (3.16+ = musl 1.2.3..1.2.6 = too new)
+ARG ALPINE_VERSION=3.15
+FROM alpine:${ALPINE_VERSION} AS vaapi
 RUN apk add --no-cache mesa-va-gallium libva patchelf
 # ... gather radeonsi_drv_video.so + its musl deps into /opt/vaapi, patchelf RPATH ...
 
-FROM lscr.io/linuxserver/plex:latest
+ARG PLEX_VERSION=1.43.4.10903-e5521bd8c-ls325   # pinned linuxserver/plex tag
+FROM lscr.io/linuxserver/plex:${PLEX_VERSION}
 COPY --from=vaapi /opt/vaapi /opt/vaapi
 ENV LIBVA_DRIVERS_PATH=/opt/vaapi/dri LIBVA_DRIVER_NAME=radeonsi
 ```
@@ -94,7 +98,12 @@ $ docker exec plex bash -c 'cd /usr/lib/plexmediaserver; LD_LIBRARY_PATH=./lib l
 # docker-compose.yml (see docker-compose.example.yml)
 services:
   plex:
-    build: .                      # this repo's Dockerfile
+    build:
+      context: .                  # this repo's Dockerfile
+      args:
+        # linuxserver/plex base tag (default in the Dockerfile; bump to update)
+        PLEX_VERSION: "1.43.4.10903-e5521bd8c-ls325"
+        # ALPINE_VERSION: "3.15"  # musl driver source, see "Picking the right Alpine"
     container_name: plex
     network_mode: host
     devices:
@@ -117,10 +126,44 @@ services:
 docker compose up -d --build
 ```
 
+Or without compose:
+
+```console
+docker build -t plex-amd .                                             # pinned default
+docker build --build-arg PLEX_VERSION=1.43.4.10903-e5521bd8c-ls325 -t plex-amd .
+```
+
+The base image is **pinned** to a specific `lscr.io/linuxserver/plex` tag via the
+`PLEX_VERSION` build arg (default in the `Dockerfile`), so rebuilds are
+reproducible. Pick any tag from
+[linuxserver/docker-plex releases](https://github.com/linuxserver/docker-plex/releases)
+-- the `<plex-version>-ls<N>` form pins both PMS and the linuxserver layer;
+`version-<plex-version>` tracks the newest linuxserver build of that PMS
+release; `latest` restores the old floating behaviour.
+
 Then in **Plex → Settings → Transcoder**, enable
 **"Use hardware acceleration when available"** (requires **Plex Pass**).
 
 ### 2. Verify the driver loads
+
+**No GPU needed** -- the image ships a self-test that loads the driver through
+Plex's *own* musl loader (`ld-musl --list`, then `LD_PRELOAD` into
+`Plex Transcoder`), which is exactly where a musl mismatch shows up as
+`Error relocating ...: symbol not found`:
+
+```console
+docker run --rm --entrypoint /opt/vaapi/driver-check.sh plex-amd   # on a fresh build
+docker exec plex /opt/vaapi/driver-check.sh                          # in a running container
+```
+
+It ends with `PASS: /opt/vaapi/dri/radeonsi_drv_video.so loads under Plex's
+musl loader`, and warns if Plex's bundled musl is no longer the 1.2.2 the
+driver was built for. The same script runs weekly in CI
+([`driver-check.yml`](./.github/workflows/driver-check.yml)) against both the
+pinned base tag and `linuxserver/plex:latest`, so a Plex musl bump is noticed
+before it reaches your box.
+
+**With the GPU**, run a real encode through the transcoder:
 
 ```console
 docker exec plex bash -c '
@@ -174,15 +217,62 @@ docker exec plex /usr/lib/plexmediaserver/lib/libc.so 2>&1 | grep Version
 
 | Plex bundled musl | Use Alpine | musl shipped |
 |---|---|---|
-| 1.2.2 | **3.15** | 1.2.2 |
+| 1.2.2 | **3.15** (default) | 1.2.2 |
 | 1.2.3 | 3.16 / 3.17 | 1.2.3 |
 | 1.2.4 | 3.18 / 3.19 | 1.2.4 |
-| 1.2.5 | 3.20 | 1.2.5 |
+| 1.2.5 | 3.20 / 3.21 / 3.22 / 3.23 | 1.2.5 |
+| 1.2.6 | 3.24 | 1.2.6 |
+
+The Alpine release is a build arg, so you don't need to edit the `Dockerfile`:
+
+```console
+docker build --build-arg ALPINE_VERSION=3.20 -t plex-amd .
+# or in compose:  build: { context: ., args: { ALPINE_VERSION: "3.20" } }
+```
 
 Rule of thumb: **never use an Alpine newer than your Plex's musl**; the driver
 will reference symbols (`qsort_r`, etc.) the older Plex musl doesn't export.
 Older Alpine is fine as long as its mesa is new enough for your GPU
 (Renoir/Cezanne/Vega need mesa ≥ ~20; Alpine 3.15 = mesa 21.2, fine).
+
+### Why Alpine 3.15 (and why not newer)
+
+Alpine 3.15 reached end-of-life in November 2023, which naturally raises the
+question of bumping it. As of **Plex Media Server 1.43.4** (September 2026) the
+answer is still *no*, and here is the evidence (the `radeonsi` driver from every
+release's `mesa-va-gallium` was checked against the symbols exported by the
+`ld-musl-x86_64.so.1` that PMS 1.43.4 bundles):
+
+| Alpine | musl | mesa | driver file | libc symbols missing from Plex's musl 1.2.2 |
+|---|---|---|---|---|
+| 3.15 | 1.2.2 | 21.2.6 | `/usr/lib/dri/radeonsi_drv_video.so` | **none** |
+| 3.16 | 1.2.3 | 21.3.9 | `/usr/lib/dri/radeonsi_drv_video.so` | `qsort_r` |
+| 3.17 | 1.2.3 | 22.2.5 | `/usr/lib/dri/radeonsi_drv_video.so` | `qsort_r` |
+| 3.18 | 1.2.4 | 23.0.4 | `/usr/lib/dri/radeonsi_drv_video.so` | `qsort_r` |
+| 3.19 | 1.2.4 | 23.3.6 | symlink → `dri/libgallium_drv_video.so` | `qsort_r` |
+| 3.20 | 1.2.5 | 24.0.9 | symlink → `dri/libgallium_drv_video.so` | `qsort_r` |
+| 3.21 | 1.2.5 | 24.2.8 | symlink → `/usr/lib/libgallium-24.2.8.so` (pkg `mesa`) | `qsort_r` |
+| 3.22 | 1.2.5 | 25.1.9 | symlink → `/usr/lib/libgallium-25.1.9.so` (pkg `mesa`) | `qsort_r` |
+| 3.24 | 1.2.6 | 26.1.6 | symlink → `/usr/lib/libgallium-26.1.6.so` (pkg `mesa`) | `qsort_r` |
+
+So every supported Alpine produces a driver that dies with
+`Error relocating .../radeonsi_drv_video.so: qsort_r: symbol not found` under
+Plex's loader. Mitigating factors for staying on 3.15:
+
+- It is a **build stage only**. Nothing from Alpine runs in the final image; the
+  only things copied out are the driver and its `.so` dependencies, which are
+  dlopen'd by Plex's own musl. The EOL status affects the apk toolchain in that
+  stage, not the shipped container.
+- The `v3.15` package mirror (`dl-cdn.alpinelinux.org/alpine/v3.15`) is still
+  served, so the build keeps working.
+- `mesa-va-gallium` still ships `radeonsi_drv_video.so` on every newer release
+  (from 3.21 as a symlink into the `mesa` package); the `Dockerfile` copies it
+  with `cp -aL`, so **bumping `ALPINE_VERSION` needs no other change** the day
+  Plex's bundled musl catches up. Check with:
+
+  ```console
+  docker exec plex /usr/lib/plexmediaserver/lib/libc.so 2>&1 | grep Version
+  ```
 
 ---
 
@@ -206,7 +296,10 @@ With `latest`/`plexpass`, a `docker restart` (or recreate) pulls the newest PMS.
 and is referenced only by env var.
 
 **2. The base image + the VAAPI driver** — rebuild occasionally (e.g. monthly, or
-after a linuxserver release) to refresh the OS layer and the Alpine musl driver:
+after a linuxserver release) to refresh the OS layer and the Alpine musl driver.
+Because the base tag is pinned, bump `PLEX_VERSION` to the new
+[linuxserver tag](https://github.com/linuxserver/docker-plex/releases) first
+(in the `Dockerfile` default, or in your compose `build.args`), then:
 
 ```console
 docker compose build --pull plex && docker compose up -d plex
@@ -219,6 +312,7 @@ a different Alpine pin:
 ```console
 ./update-plex.sh                      # defaults: service=plex container=plex
 ./update-plex.sh plex plex-v2         # custom compose service / container name
+PLEX_VERSION=1.43.4.10903-e5521bd8c-ls325 ./update-plex.sh   # rebuild on a newer base tag
 ```
 
 ### Will a Plex update break HW transcoding?
@@ -228,8 +322,8 @@ musl **1.2.2** (the *floor*). If Plex bumps its bundled musl *upward* (1.2.3+), 
 1.2.2-built driver still loads, because newer musl is a **superset** of older
 symbols. The only break direction is a driver built on musl *newer* than Plex's —
 which only happens if you bump the Alpine base too far ahead. So: **leave the
-Alpine pin alone**, and re-check only if a `--pull` rebuild ever changes Plex's
-musl. Verify after any update:
+`ALPINE_VERSION` pin alone**, and re-check only if a `--pull` rebuild ever changes
+Plex's musl. Verify after any update:
 
 ```console
 docker exec plex /usr/lib/plexmediaserver/lib/libc.so 2>&1 | grep Version

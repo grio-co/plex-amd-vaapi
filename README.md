@@ -40,7 +40,8 @@ FROM alpine:${ALPINE_VERSION} AS vaapi
 RUN apk add --no-cache mesa-va-gallium libva patchelf
 # ... gather radeonsi_drv_video.so + its musl deps into /opt/vaapi, patchelf RPATH ...
 
-FROM lscr.io/linuxserver/plex:latest
+ARG PLEX_VERSION=1.43.4.10903-e5521bd8c-ls325   # pinned linuxserver/plex tag
+FROM lscr.io/linuxserver/plex:${PLEX_VERSION}
 COPY --from=vaapi /opt/vaapi /opt/vaapi
 ENV LIBVA_DRIVERS_PATH=/opt/vaapi/dri LIBVA_DRIVER_NAME=radeonsi
 ```
@@ -95,7 +96,12 @@ $ docker exec plex bash -c 'cd /usr/lib/plexmediaserver; LD_LIBRARY_PATH=./lib l
 # docker-compose.yml (see docker-compose.example.yml)
 services:
   plex:
-    build: .                      # this repo's Dockerfile
+    build:
+      context: .                  # this repo's Dockerfile
+      args:
+        # linuxserver/plex base tag (default in the Dockerfile; bump to update)
+        PLEX_VERSION: "1.43.4.10903-e5521bd8c-ls325"
+        # ALPINE_VERSION: "3.15"  # musl driver source, see "Picking the right Alpine"
     container_name: plex
     network_mode: host
     devices:
@@ -117,6 +123,21 @@ services:
 ```console
 docker compose up -d --build
 ```
+
+Or without compose:
+
+```console
+docker build -t plex-amd .                                             # pinned default
+docker build --build-arg PLEX_VERSION=1.43.4.10903-e5521bd8c-ls325 -t plex-amd .
+```
+
+The base image is **pinned** to a specific `lscr.io/linuxserver/plex` tag via the
+`PLEX_VERSION` build arg (default in the `Dockerfile`), so rebuilds are
+reproducible. Pick any tag from
+[linuxserver/docker-plex releases](https://github.com/linuxserver/docker-plex/releases)
+-- the `<plex-version>-ls<N>` form pins both PMS and the linuxserver layer;
+`version-<plex-version>` tracks the newest linuxserver build of that PMS
+release; `latest` restores the old floating behaviour.
 
 Then in **Plex → Settings → Transcoder**, enable
 **"Use hardware acceleration when available"** (requires **Plex Pass**).
@@ -254,7 +275,10 @@ With `latest`/`plexpass`, a `docker restart` (or recreate) pulls the newest PMS.
 and is referenced only by env var.
 
 **2. The base image + the VAAPI driver** — rebuild occasionally (e.g. monthly, or
-after a linuxserver release) to refresh the OS layer and the Alpine musl driver:
+after a linuxserver release) to refresh the OS layer and the Alpine musl driver.
+Because the base tag is pinned, bump `PLEX_VERSION` to the new
+[linuxserver tag](https://github.com/linuxserver/docker-plex/releases) first
+(in the `Dockerfile` default, or in your compose `build.args`), then:
 
 ```console
 docker compose build --pull plex && docker compose up -d plex
@@ -267,6 +291,7 @@ a different Alpine pin:
 ```console
 ./update-plex.sh                      # defaults: service=plex container=plex
 ./update-plex.sh plex plex-v2         # custom compose service / container name
+PLEX_VERSION=1.43.4.10903-e5521bd8c-ls325 ./update-plex.sh   # rebuild on a newer base tag
 ```
 
 ### Will a Plex update break HW transcoding?

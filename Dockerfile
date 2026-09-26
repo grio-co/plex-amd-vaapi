@@ -13,6 +13,12 @@
 # package mirror is still served. See README "Why Alpine 3.15 (and why not newer)".
 # PLACEHOLDER(greg): confirm staying on Alpine 3.15 (EOL); 3.16-3.24 all need qsort_r, which Plex's musl 1.2.2 lacks
 ARG ALPINE_VERSION=3.15
+# Pinned linuxserver/plex tag for stage 2 (<plex version>-ls<build>); override with
+#   docker build --build-arg PLEX_VERSION=<tag> .
+# Tags: https://github.com/linuxserver/docker-plex/releases (or `latest`).
+# (Both ARGs live above the first FROM: an ARG between stages is scoped to the
+# preceding stage and would not be visible to the second FROM.)
+ARG PLEX_VERSION=1.43.4.10903-e5521bd8c-ls325
 FROM alpine:${ALPINE_VERSION} AS vaapi
 RUN apk add --no-cache mesa-va-gallium libva patchelf
 RUN set -eux; mkdir -p /opt/vaapi/dri; \
@@ -27,8 +33,8 @@ RUN set -eux; mkdir -p /opt/vaapi/dri; \
     for so in /opt/vaapi/*.so*; do patchelf --set-rpath /opt/vaapi "$so" 2>/dev/null || true; done; \
     echo "=== musl VAAPI userspace ==="; ls /opt/vaapi; echo "count=$(ls /opt/vaapi/*.so* | wc -l)"
 
-# Stage 2: linuxserver/plex + the musl VAAPI driver
-FROM lscr.io/linuxserver/plex:latest
+# Stage 2: linuxserver/plex + the musl VAAPI driver (PLEX_VERSION: see top)
+FROM lscr.io/linuxserver/plex:${PLEX_VERSION}
 COPY --from=vaapi /opt/vaapi /opt/vaapi
 ENV LIBVA_DRIVERS_PATH=/opt/vaapi/dri \
     LIBVA_DRIVER_NAME=radeonsi
